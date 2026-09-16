@@ -7,9 +7,10 @@ Procesa el histórico de Tinka:
 3. Normaliza sorteos
 4. Genera estadísticas base
 5. Genera features para IA
+6. Genera dataset compatible con TimesFM
 
 Uso:
-    python src/run_pipeline.py
+    py src/run_pipeline.py
 """
 
 from pathlib import Path
@@ -20,6 +21,7 @@ sys.path.append(str(ROOT))
 
 from src.loaders.excel_loader import cargar_excel_tinka
 from src.features.build_features import build_features
+from src.features.build_timesfm_dataset import build_timesfm_dataset
 
 DATA_RAW = ROOT / "data" / "raw" / "tinka_dataset_historico_20_anios.xlsx"
 DATA_PROCESSED = ROOT / "data" / "processed"
@@ -61,6 +63,7 @@ def main():
 
     sorteos_file = DATA_PROCESSED / "sorteos_largo.csv"
     features_file = DATA_PROCESSED / "features_modelo.csv"
+    timesfm_file = DATA_PROCESSED / "timesfm_input.csv"
 
     df_largo.to_csv(sorteos_file, index=False)
 
@@ -70,6 +73,11 @@ def main():
     )
 
     build_features(sorteos_file, features_file)
+
+    build_timesfm_dataset(
+        sorteos_file,
+        timesfm_file
+    )
 
     print("Proceso terminado correctamente")
     print(f"Archivos generados en: {DATA_PROCESSED}")
