@@ -1,0 +1,21 @@
+# Data Science
+pandas>=2.0
+numpy>=1.26
+scikit-learn>=1.4
+openpyxl>=3.1
+
+# Visualizacion
+matplotlib>=3.8
+
+# Notebooks
+jupyter>=1.0
+
+# API
+fastapi>=0.110
+uvicorn>=0.27
+
+# Time Series Foundation Model
+# timesfm
+
+# Desarrollo
+pytest>=8.0
