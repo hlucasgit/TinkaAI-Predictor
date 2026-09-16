@@ -22,9 +22,7 @@ def cargar_excel(ruta: str | Path) -> pd.DataFrame:
     if not ruta.exists():
         raise FileNotFoundError(f"No existe archivo: {ruta}")
 
-    df = pd.read_excel(ruta)
-
-    return df
+    return pd.read_excel(ruta)
 
 
 def detectar_columnas_numeros(df: pd.DataFrame):
@@ -57,3 +55,9 @@ def convertir_formato_largo(df: pd.DataFrame):
                 })
 
     return pd.DataFrame(registros)
+
+
+def cargar_excel_tinka(ruta: str | Path) -> pd.DataFrame:
+    """Carga y normaliza el histórico para el pipeline principal."""
+    df = cargar_excel(ruta)
+    return convertir_formato_largo(df)
