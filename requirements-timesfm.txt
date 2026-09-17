@@ -1,0 +1,11 @@
+# Entorno reproducible para TimesFM en TinkaAI-Predictor
+# Versiones validadas en el entorno local del proyecto el 2026-09-16.
+
+timesfm==3.0.2
+torch==2.14.0
+einshape==1.0
+pandas==3.0.5
+numpy==2.4.6
+scikit-learn==1.9.1
+openpyxl==3.1.5
+matplotlib==3.11.2
