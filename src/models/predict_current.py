@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import itertools
+import json
 from pathlib import Path
 
 import numpy as np
@@ -32,7 +33,10 @@ WEIGHTS_FILE = ROOT / "data" / "processed" / "optimizacion_pesos_ensemble_resume
 
 CURRENT_INPUT_FILE = ROOT / "data" / "processed" / "timesfm_input_actual.csv"
 RANKING_FILE = ROOT / "data" / "processed" / "ranking_actual.csv"
+RANKING_TIMESFM_FILE = ROOT / "data" / "processed" / "ranking_actual_timesfm.csv"
+RANKING_RECIENTE_FILE = ROOT / "data" / "processed" / "ranking_actual_reciente.csv"
 COMBOS_FILE = ROOT / "data" / "processed" / "combinaciones_actual.csv"
+SNAPSHOT_FILE = ROOT / "data" / "processed" / "prediccion_congelada_actual.json"
 
 TOTAL_NUMEROS = 53
 TOP_K = 6
@@ -212,12 +216,99 @@ def generar_ranking(
         }
     )
 
+    # IMPORTANTE: si un componente tiene peso 0, no debe actuar como desempate oculto.
+    # Por ello el ranking final solo usa ScoreFinal y Numero como criterio estable.
     out = out.sort_values(
-        ["ScoreFinal", "ScoreTimesFMNorm", "Numero"],
-        ascending=[False, False, True],
+        ["ScoreFinal", "Numero"],
+        ascending=[False, True],
     ).reset_index(drop=True)
     out.insert(0, "Posicion", np.arange(1, len(out) + 1))
     return out
+
+
+def analizar_corte(ranking: pd.DataFrame, k: int) -> dict:
+    if k < 1 or k > len(ranking):
+        raise ValueError("k fuera de rango")
+
+    threshold = float(ranking.iloc[k - 1]["ScoreFinal"])
+    estrictos = ranking.loc[
+        ranking["ScoreFinal"] > threshold + 1e-12, "Numero"
+    ].astype(int).tolist()
+    empatados = ranking.loc[
+        np.isclose(
+            ranking["ScoreFinal"].to_numpy(dtype=float),
+            threshold,
+            rtol=0.0,
+            atol=1e-12,
+        ),
+        "Numero",
+    ].astype(int).tolist()
+
+    return {
+        "k": k,
+        "score_corte": threshold,
+        "numeros_sobre_corte": sorted(estrictos),
+        "numeros_empatados_en_corte": sorted(empatados),
+        "plazas_restantes_dentro_empate": k - len(estrictos),
+        "pool_corte": sorted(set(estrictos + empatados)),
+    }
+
+
+def guardar_rankings_componentes(ranking: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    tfm = ranking.sort_values(
+        ["ScoreTimesFMNorm", "Numero"], ascending=[False, True]
+    ).reset_index(drop=True).copy()
+    tfm.insert(0, "PosicionTimesFM", np.arange(1, len(tfm) + 1))
+
+    reciente = ranking.sort_values(
+        ["ScoreRecienteNorm", "Numero"], ascending=[False, True]
+    ).reset_index(drop=True).copy()
+    reciente.insert(0, "PosicionReciente", np.arange(1, len(reciente) + 1))
+
+    tfm.to_csv(RANKING_TIMESFM_FILE, index=False)
+    reciente.to_csv(RANKING_RECIENTE_FILE, index=False)
+    return tfm, reciente
+
+
+def guardar_snapshot(
+    historial: pd.DataFrame,
+    pesos: tuple[float, float, float],
+    recent_window: int,
+    ranking: pd.DataFrame,
+    ranking_tfm: pd.DataFrame,
+    ranking_reciente: pd.DataFrame,
+    combos: pd.DataFrame,
+) -> dict:
+    corte = analizar_corte(ranking, TOP_K)
+
+    snapshot = {
+        "tipo": "prediccion_prospectiva_congelada",
+        "ultima_fecha_historica": historial["Fecha"].max().date().isoformat(),
+        "sorteos_disponibles": int(len(historial)),
+        "ventana_frecuencia_reciente": int(recent_window),
+        "pesos": {
+            "TimesFM": float(pesos[0]),
+            "Historico": float(pesos[1]),
+            "Reciente": float(pesos[2]),
+        },
+        "top6_determinista": ranking.head(TOP_K)["Numero"].astype(int).tolist(),
+        "analisis_corte_top6": corte,
+        "top6_timesfm_diagnostico": ranking_tfm.head(TOP_K)["Numero"].astype(int).tolist(),
+        "top6_frecuencia_reciente": ranking_reciente.head(TOP_K)["Numero"].astype(int).tolist(),
+        "top10_final": ranking.head(10)[
+            ["Numero", "ScoreFinal", "ScoreTimesFMNorm", "ScoreHistoricoNorm", "ScoreRecienteNorm"]
+        ].to_dict(orient="records"),
+        "combinaciones": combos.to_dict(orient="records"),
+        "advertencia": (
+            "Scores experimentales; no son probabilidades calibradas. "
+            "Los empates en el corte Top-6 se reportan explicitamente."
+        ),
+    }
+
+    with open(SNAPSHOT_FILE, "w", encoding="utf-8") as fh:
+        json.dump(snapshot, fh, ensure_ascii=False, indent=2)
+
+    return snapshot
 
 
 def historicas_set(df: pd.DataFrame, columnas: list[str]) -> set[tuple[int, ...]]:
@@ -372,10 +463,25 @@ def main():
     )
     combos.to_csv(COMBOS_FILE, index=False)
 
+    ranking_tfm, ranking_reciente = guardar_rankings_componentes(ranking)
+    snapshot = guardar_snapshot(
+        historial,
+        pesos,
+        args.recent_window,
+        ranking,
+        ranking_tfm,
+        ranking_reciente,
+        combos,
+    )
+    corte_top6 = snapshot["analisis_corte_top6"]
+
     print("-" * 78)
     print(f"Historial actual: {CURRENT_INPUT_FILE}")
     print(f"Ranking actual: {RANKING_FILE}")
+    print(f"Ranking TimesFM diagnostico: {RANKING_TIMESFM_FILE}")
+    print(f"Ranking frecuencia reciente: {RANKING_RECIENTE_FILE}")
     print(f"Combinaciones: {COMBOS_FILE}")
+    print(f"Snapshot congelado: {SNAPSHOT_FILE}")
     print("-" * 78)
     print("Top 10 actual:")
     print(
@@ -392,6 +498,25 @@ def main():
     )
 
     print("-" * 78)
+    print("Diagnostico del corte Top-6:")
+    print(f"Score de corte: {corte_top6['score_corte']:.6f}")
+    print(f"Numeros estrictamente sobre el corte: {corte_top6['numeros_sobre_corte']}")
+    print(f"Empatados en el corte: {corte_top6['numeros_empatados_en_corte']}")
+    print(
+        "Plazas a cubrir dentro del empate: "
+        f"{corte_top6['plazas_restantes_dentro_empate']}"
+    )
+    print(f"Pool Top-6 tie-aware: {corte_top6['pool_corte']}")
+    print(
+        "Top-6 TimesFM (solo diagnostico): "
+        f"{ranking_tfm.head(TOP_K)['Numero'].astype(int).tolist()}"
+    )
+    print(
+        "Top-6 frecuencia reciente: "
+        f"{ranking_reciente.head(TOP_K)['Numero'].astype(int).tolist()}"
+    )
+
+    print("-" * 78)
     print("Combinaciones candidatas:")
     for _, r in combos.iterrows():
         nums = "-".join(f"{int(r[f'Numero{i}']):02d}" for i in range(1, 7))
@@ -399,7 +524,8 @@ def main():
 
     print(
         "Nota: estas combinaciones son una salida experimental de ranking y cobertura; "
-        "no existe garantia de que sean mas probables en un sorteo justo."
+        "no existe garantia de que sean mas probables en un sorteo justo. "
+        "El snapshot queda congelado para evaluacion prospectiva sin reajustarlo."
     )
 
 
