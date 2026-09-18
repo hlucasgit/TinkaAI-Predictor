@@ -6,8 +6,8 @@ data/processed/prediccion_congelada_actual.json
 Uso de prueba (NO guarda):
   python src/models/evaluate_frozen_prediction.py --numbers 1 2 3 4 5 6
 
-Uso con resultado real manual (guarda solo si se agrega --save):
-  python src/models/evaluate_frozen_prediction.py --numbers 1 2 3 4 5 6 --result-date 2026-09-20 --save
+Uso con resultado real manual (requiere confirmacion explicita):
+  python src/models/evaluate_frozen_prediction.py --numbers 1 2 3 4 5 6 --result-date 2026-09-20 --save --confirm-real
 
 Tambien puede evaluar una fecha ya registrada en:
 data/raw/tinka_actualizacion_2026.csv
@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from datetime import date
 from pathlib import Path
 
 import pandas as pd
@@ -193,6 +194,11 @@ def parse_args():
         action="store_true",
         help="Guarda la evaluacion en el ledger. Sin --save la ejecucion es solo prueba.",
     )
+    p.add_argument(
+        "--confirm-real",
+        action="store_true",
+        help="Confirma que --numbers corresponde a un resultado real ya ocurrido.",
+    )
     return p.parse_args()
 
 
@@ -211,6 +217,30 @@ def main():
     if args.save and not fecha:
         raise ValueError(
             "Para guardar una evaluacion con --numbers debe indicar --result-date YYYY-MM-DD"
+        )
+
+    if fecha:
+        fecha_obj = pd.to_datetime(fecha, errors="raise").date()
+        hoy = date.today()
+        fecha_snapshot = pd.to_datetime(
+            snapshot.get("ultima_fecha_historica"), errors="raise"
+        ).date()
+
+        if fecha_obj <= fecha_snapshot:
+            raise ValueError(
+                f"La fecha evaluada {fecha_obj} debe ser posterior al snapshot "
+                f"({fecha_snapshot})."
+            )
+        if fecha_obj > hoy:
+            raise ValueError(
+                f"No se puede guardar/evaluar como real una fecha futura: {fecha_obj}. "
+                f"Hoy es {hoy}."
+            )
+
+    if args.save and args.numbers is not None and not args.confirm_real:
+        raise ValueError(
+            "Para guardar numeros manuales debe agregar --confirm-real. "
+            "Esto evita registrar ejemplos o pruebas como resultados oficiales."
         )
 
     r = evaluar(snapshot, reales)
