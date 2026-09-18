@@ -24,6 +24,7 @@ ROOT = Path(__file__).resolve().parents[2]
 INPUT_FILE = ROOT / "data" / "processed" / "timesfm_input.csv"
 DETAIL_FILE = ROOT / "data" / "processed" / "backtest_ensemble_detalle.csv"
 SUMMARY_FILE = ROOT / "data" / "processed" / "backtest_ensemble_resumen.csv"
+SCORES_FILE = ROOT / "data" / "processed" / "backtest_ensemble_scores.csv"
 
 TOTAL_NUMEROS = 53
 TOP_K = 6
@@ -37,15 +38,15 @@ DEFAULT_W_RECENT = 0.30
 DEFAULT_W_RECENCY = 0.00
 
 
-def minmax(values: np.ndarray) -> np.ndarray:
+def normalizar_rango(values: np.ndarray) -> np.ndarray:
+    """Normalizacion ordinal 0..1 robusta frente a outliers y muchos ceros."""
     x = np.asarray(values, dtype=float)
-    minimo = float(np.nanmin(x))
-    maximo = float(np.nanmax(x))
-    if not np.isfinite(minimo) or not np.isfinite(maximo):
+    if not np.isfinite(x).all():
         raise ValueError("Valores no finitos al normalizar")
-    if abs(maximo - minimo) < 1e-12:
+    if len(x) <= 1:
         return np.full_like(x, 0.5, dtype=float)
-    return (x - minimo) / (maximo - minimo)
+    ranks = pd.Series(x).rank(method="average", ascending=True).to_numpy(dtype=float)
+    return (ranks - 1.0) / (len(x) - 1.0)
 
 
 def validar_pesos(w_timesfm: float, w_hist: float, w_recent: float, w_recency: float) -> None:
@@ -121,10 +122,10 @@ def ensemble_scores(
     recency_raw = recencia_scores(contexto, columnas)
 
     return (
-        w_timesfm * minmax(scores_tfm_raw)
-        + w_hist * minmax(hist_raw)
-        + w_recent * minmax(recent_raw)
-        + w_recency * minmax(recency_raw)
+        w_timesfm * normalizar_rango(scores_tfm_raw)
+        + w_hist * normalizar_rango(hist_raw)
+        + w_recent * normalizar_rango(recent_raw)
+        + w_recency * normalizar_rango(recency_raw)
     )
 
 
@@ -234,6 +235,7 @@ def main():
 
     model = cargar_modelo(args.context)
     detalle = []
+    scores_detalle = []
 
     for j, idx in enumerate(range(inicio, len(df)), start=1):
         contexto = df.iloc[:idx]
@@ -260,6 +262,30 @@ def main():
             .mean(axis=0)
             .to_numpy(dtype=float)
         )
+        hist_raw = contexto[columnas].mean(axis=0).to_numpy(dtype=float)
+        recency_raw = recencia_scores(contexto, columnas)
+        n_tfm = normalizar_rango(scores_tfm_raw)
+        n_hist = normalizar_rango(hist_raw)
+        n_recent = normalizar_rango(recent_raw)
+        n_recency = normalizar_rango(recency_raw)
+
+        for k, c in enumerate(columnas):
+            scores_detalle.append(
+                {
+                    "NroEvaluacion": j,
+                    "FechaReal": real["Fecha"].date().isoformat(),
+                    "Numero": int(c[1:]),
+                    "AparecioReal": int(real[c]),
+                    "ScoreTimesFMNorm": float(n_tfm[k]),
+                    "ScoreHistoricoNorm": float(n_hist[k]),
+                    "ScoreRecienteNorm": float(n_recent[k]),
+                    "ScoreRecenciaNorm": float(n_recency[k]),
+                    "TimesFMRaw": float(scores_tfm_raw[k]),
+                    "HistoricoRaw": float(hist_raw[k]),
+                    "RecienteRaw": float(recent_raw[k]),
+                    "RecenciaRaw": float(recency_raw[k]),
+                }
+            )
 
         pred_tfm = top_k(scores_tfm_raw, columnas)
         pred_freq = top_k(recent_raw, columnas)
@@ -294,6 +320,7 @@ def main():
     d = pd.DataFrame(detalle)
     DETAIL_FILE.parent.mkdir(parents=True, exist_ok=True)
     d.to_csv(DETAIL_FILE, index=False)
+    pd.DataFrame(scores_detalle).to_csv(SCORES_FILE, index=False)
 
     h_tfm = d["AciertosTimesFM"].to_numpy(dtype=int)
     h_freq = d["AciertosFrecuencia"].to_numpy(dtype=int)
@@ -340,6 +367,7 @@ def main():
     print("-" * 76)
     print(f"Detalle: {DETAIL_FILE}")
     print(f"Resumen: {SUMMARY_FILE}")
+    print(f"Scores por numero: {SCORES_FILE}")
     print(f"TimesFM promedio Top-6: {prom_tfm:.4f} ({total_tfm})")
     print(f"Frecuencia promedio Top-6: {prom_freq:.4f} ({total_freq})")
     print(f"Ensemble promedio Top-6: {prom_ens:.4f} ({total_ens})")
