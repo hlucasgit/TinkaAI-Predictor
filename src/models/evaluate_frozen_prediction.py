@@ -3,8 +3,11 @@
 Por defecto lee:
 data/processed/prediccion_congelada_actual.json
 
-Uso:
+Uso de prueba (NO guarda):
   python src/models/evaluate_frozen_prediction.py --numbers 1 2 3 4 5 6
+
+Uso con resultado real manual (guarda solo si se agrega --save):
+  python src/models/evaluate_frozen_prediction.py --numbers 1 2 3 4 5 6 --result-date 2026-09-20 --save
 
 Tambien puede evaluar una fecha ya registrada en:
 data/raw/tinka_actualizacion_2026.csv
@@ -179,7 +182,17 @@ def parse_args():
     g.add_argument("--numbers", nargs=6, type=int)
     g.add_argument("--date", type=str)
     p.add_argument("--snapshot", type=str, default=str(DEFAULT_SNAPSHOT))
-    p.add_argument("--no-save", action="store_true")
+    p.add_argument(
+        "--result-date",
+        type=str,
+        default=None,
+        help="Fecha real YYYY-MM-DD cuando --numbers corresponde a un sorteo real",
+    )
+    p.add_argument(
+        "--save",
+        action="store_true",
+        help="Guarda la evaluacion en el ledger. Sin --save la ejecucion es solo prueba.",
+    )
     return p.parse_args()
 
 
@@ -190,10 +203,15 @@ def main():
 
     if args.numbers is not None:
         reales = validar_numeros(args.numbers)
-        fecha = None
+        fecha = args.result_date
     else:
         reales = cargar_por_fecha(args.date)
         fecha = args.date
+
+    if args.save and not fecha:
+        raise ValueError(
+            "Para guardar una evaluacion con --numbers debe indicar --result-date YYYY-MM-DD"
+        )
 
     r = evaluar(snapshot, reales)
 
@@ -234,9 +252,11 @@ def main():
             f"{m['Numeros']} | aciertos={m['Aciertos']} | acertados={m['Acertados']}"
         )
 
-    if not args.no_save:
+    if args.save:
         append_ledger(snapshot, reales, r, fecha)
         print(f"Ledger actualizado: {OUTPUT_FILE}")
+    else:
+        print("Modo prueba: no se modifico el ledger. Use --save solo con un resultado real.")
 
 
 if __name__ == "__main__":
