@@ -36,15 +36,21 @@ DEFAULT_W_RECENT = 0.30
 DEFAULT_W_RECENCY = 0.00
 
 
-def minmax(values: np.ndarray) -> np.ndarray:
+def normalizar_rango(values: np.ndarray) -> np.ndarray:
+    """Convierte un vector a score ordinal 0..1 preservando el ranking.
+
+    Se usa ranking percentil en vez de min-max porque TimesFM puede producir
+    muchos valores iguales/cercanos a cero y uno o pocos outliers. Min-max
+    aplastaria la mayor parte de la senal contra 0.
+    """
     x = np.asarray(values, dtype=float)
-    minimo = float(np.nanmin(x))
-    maximo = float(np.nanmax(x))
-    if not np.isfinite(minimo) or not np.isfinite(maximo):
+    if not np.isfinite(x).all():
         raise ValueError("Se encontraron valores no finitos al normalizar")
-    if abs(maximo - minimo) < 1e-12:
+    if len(x) <= 1:
         return np.full_like(x, 0.5, dtype=float)
-    return (x - minimo) / (maximo - minimo)
+
+    ranks = pd.Series(x).rank(method="average", ascending=True).to_numpy(dtype=float)
+    return (ranks - 1.0) / (len(x) - 1.0)
 
 
 def validar_pesos(w_timesfm: float, w_hist: float, w_recent: float, w_recency: float) -> None:
@@ -141,10 +147,10 @@ def generar_ranking(
     recent_raw = reciente[columnas].mean(axis=0).to_numpy(dtype=float)
     recency_raw = calcular_recencia(df, columnas)
 
-    score_timesfm = minmax(score_timesfm_raw)
-    score_hist = minmax(hist_raw)
-    score_recent = minmax(recent_raw)
-    score_recency = minmax(recency_raw)
+    score_timesfm = normalizar_rango(score_timesfm_raw)
+    score_hist = normalizar_rango(hist_raw)
+    score_recent = normalizar_rango(recent_raw)
+    score_recency = normalizar_rango(recency_raw)
 
     final = (
         w_timesfm * score_timesfm
@@ -215,6 +221,11 @@ def main():
     print(f"Sorteos cargados: {len(df)}")
     print(f"Ultima fecha historica: {df['Fecha'].max().date()}")
     print(f"Ventana frecuencia reciente: {args.recent_window}")
+    print(
+        "Diagnostico TimesFM paso 1: "
+        f"{int(np.sum(score_timesfm_raw > 0))}/{TOTAL_NUMEROS} scores > 0; "
+        f"{len(np.unique(np.round(score_timesfm_raw, 12)))} valores unicos"
+    )
     print(
         "Pesos: "
         f"TimesFM={args.w_timesfm:.2f}, "
